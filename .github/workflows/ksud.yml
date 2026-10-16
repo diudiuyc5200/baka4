@@ -51,7 +51,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
-          # 移除 targets: ${{ inputs.target }} ！！！build-std不能预先安装target标准库
+          targets: ${{ inputs.target }}
           components: rust-src
 
       - uses: Swatinem/rust-cache@v2
@@ -60,12 +60,6 @@ jobs:
           prefix-key: ksud-${{ inputs.target }}
           workspaces: userspace/ksud
           cache-targets: true
-
-      - name: Clean old target artifacts (critical for build-std)
-        run: |
-          cd userspace/ksud
-          cargo clean
-          rm -rf target
 
       - name: Setup cargo-ndk
         run: cargo install cargo-ndk --locked
