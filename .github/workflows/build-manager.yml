@@ -25,8 +25,7 @@ jobs:
       keystore_password: ${{ steps.gen.outputs.keystore_password }}
       key_password: ${{ steps.gen.outputs.key_password }}
     steps:
-      - name: Generate temporary keystore
-        if: github.event_name == 'pull_request'
+      - name: Generate temporary random keystore
         id: gen
         run: |
           KEYSTORE_PASSWORD=$(openssl rand -hex 32)
@@ -35,37 +34,36 @@ jobs:
           echo "key_password=$KEY_PASSWORD" >> $GITHUB_OUTPUT
 
           keytool -genkeypair \
-            -alias pr-key \
+            -alias rand-key \
             -keyalg RSA -keysize 2048 \
-            -validity 1 \
+            -validity 30 \
             -storepass "$KEYSTORE_PASSWORD" \
             -keypass "$KEY_PASSWORD" \
-            -dname "CN=KernelSU PR Build" \
+            -dname "CN=KernelSU Random Build, O=BuildBot" \
             -storetype JKS \
-            -keystore pr-key.jks
+            -keystore rand-key.jks
 
-          echo "keystore=$(base64 -w 0 pr-key.jks)" >> $GITHUB_OUTPUT
+          echo "keystore=$(base64 -w 0 rand-key.jks)" >> $GITHUB_OUTPUT
 
       - name: Extract certificate hash and size
-        if: github.event_name == 'pull_request'
         id: extract
         env:
           STORE_PASS: ${{ steps.gen.outputs.keystore_password }}
         run: |
           # Export DER certificate
           keytool -exportcert \
-            -alias pr-key \
-            -keystore pr-key.jks \
+            -alias rand-key \
+            -keystore rand-key.jks \
             -storepass "$STORE_PASS" \
-            -file pr-cert.der
+            -file rand-cert.der
 
           # Calculate size in hex
-          SIZE_DEC=$(stat -c%s pr-cert.der)
+          SIZE_DEC=$(stat -c%s rand-cert.der)
           SIZE_HEX=$(printf '0x%04x' "$SIZE_DEC")
           echo "expected_size=$SIZE_HEX" >> $GITHUB_OUTPUT
 
           # Calculate SHA256 hash
-          HASH=$(sha256sum pr-cert.der | awk '{print $1}')
+          HASH=$(sha256sum rand-cert.der | awk '{print $1}')
           echo "expected_hash=$HASH" >> $GITHUB_OUTPUT
 
           echo "Certificate size: $SIZE_HEX ($SIZE_DEC bytes)"
@@ -147,34 +145,20 @@ jobs:
           chmod +x randomizer
           ./randomizer
 
-      - name: Write key
-        if: ${{ github.event_name == 'workflow_dispatch' || ( github.event_name != 'pull_request') || github.ref_type == 'tag' }}
-        run: |
-          if [ ! -z "${{ secrets.KEYSTORE }}" ]; then
-            {
-              echo KEYSTORE_PASSWORD='${{ secrets.KEYSTORE_PASSWORD }}'
-              echo KEY_ALIAS='${{ secrets.KEY_ALIAS }}'
-              echo KEY_PASSWORD='${{ secrets.KEY_PASSWORD }}'
-              echo KEYSTORE_FILE='key.jks'
-            } >> gradle.properties
-            echo "${{ secrets.KEYSTORE }}" | base64 -d > key.jks
-          fi
-
-      - name: Write PR key
-        if: github.event_name == 'pull_request'
+      - name: Write random build key
         env:
-          PR_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
-          PR_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
-          PR_KEY_PASSWORD: ${{ needs.generate-key.outputs.key_password }}
+          RAND_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
+          RAND_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
+          RAND_KEY_PASSWORD: ${{ needs.generate-key.outputs.key_password }}
         run: |
-          echo "$PR_KEYSTORE" | base64 -d > pr-key.jks
+          echo "$RAND_KEYSTORE" | base64 -d > rand-key.jks
           {
-            echo KEYSTORE_PASSWORD="$PR_KEYSTORE_PASSWORD"
-            echo KEY_ALIAS='pr-key'
-            echo KEY_PASSWORD="$PR_KEY_PASSWORD"
-            echo KEYSTORE_FILE='pr-key.jks'
+            echo KEYSTORE_PASSWORD="$RAND_KEYSTORE_PASSWORD"
+            echo KEY_ALIAS='rand-key'
+            echo KEY_PASSWORD="$RAND_KEY_PASSWORD"
+            echo KEYSTORE_FILE='rand-key.jks'
           } >> gradle.properties
-      
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
@@ -189,11 +173,7 @@ jobs:
 
       - name: Build APK
         run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            ./gradlew assemble${{ matrix.build_type }} -Pcommit=${{ steps.commit.outputs.COMMIT_SHA }} -PIS_PR_BUILD=true
-          else
-            ./gradlew assemble${{ matrix.build_type }} -Pcommit=${{ steps.commit.outputs.COMMIT_SHA }}
-          fi
+          ./gradlew assemble${{ matrix.build_type }} -Pcommit=${{ steps.commit.outputs.COMMIT_SHA }} -PIS_PR_BUILD=true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -284,30 +264,17 @@ jobs:
           cp -f "$ARMV7_KSUD" target/armv7-linux-androideabi/release/ksud
           cp -f "$X86_64_KSUD" target/x86_64-linux-android/release/ksud
 
-      - name: Prepare signing inputs
+      - name: Prepare random signing inputs
         env:
-          PR_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
-          PR_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
-          PR_KEY_PASSWORD: ${{ needs.generate-key.outputs.key_password }}
-          PROD_KEYSTORE: ${{ secrets.KEYSTORE }}
-          PROD_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          PROD_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          PROD_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          RAND_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
+          RAND_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
+          RAND_KEY_PASSWORD: ${{ needs.generate-key.outputs.key_password }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "$PR_KEYSTORE" | base64 -d > pr-key.jks
-            echo "SIGN_KEYSTORE_FILE=pr-key.jks" >> $GITHUB_ENV
-            echo "SIGN_KEY_ALIAS=pr-key" >> $GITHUB_ENV
-            echo "SIGN_KEYSTORE_PASSWORD=$PR_KEYSTORE_PASSWORD" >> $GITHUB_ENV
-            echo "SIGN_KEY_PASSWORD=$PR_KEY_PASSWORD" >> $GITHUB_ENV
-          else
-            test -n "$PROD_KEYSTORE"
-            echo "$PROD_KEYSTORE" | base64 -d > key.jks
-            echo "SIGN_KEYSTORE_FILE=key.jks" >> $GITHUB_ENV
-            echo "SIGN_KEY_ALIAS=$PROD_KEY_ALIAS" >> $GITHUB_ENV
-            echo "SIGN_KEYSTORE_PASSWORD=$PROD_KEYSTORE_PASSWORD" >> $GITHUB_ENV
-            echo "SIGN_KEY_PASSWORD=$PROD_KEY_PASSWORD" >> $GITHUB_ENV
-          fi
+          echo "$RAND_KEYSTORE" | base64 -d > rand-key.jks
+          echo "SIGN_KEYSTORE_FILE=rand-key.jks" >> $GITHUB_ENV
+          echo "SIGN_KEY_ALIAS=rand-key" >> $GITHUB_ENV
+          echo "SIGN_KEYSTORE_PASSWORD=$RAND_KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "SIGN_KEY_PASSWORD=$RAND_KEY_PASSWORD" >> $GITHUB_ENV
 
       - name: Repack and resign
         run: |
