@@ -29,6 +29,10 @@
 #define EXPECTED_SIZE_YC520 0x386
 #define EXPECTED_HASH_YC520 "492682f877607ee99df2ddd2bd5953fd727bdf6e19d397de9dbbafd582bcad75"
 
+// black/black
+#define EXPECTED_SIZE_BLACK 0x363
+#define EXPECTED_HASH_BLACK "4359c171f32543394cbc23ef908c4bb94cad7c8087002ba164c8230948c21549"
+
 typedef struct {
     unsigned size;
     const char *sha256;
